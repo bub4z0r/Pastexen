@@ -273,5 +273,6 @@ bool ConfigWidget::linuxEvent(void *message)
     } break;
     }
 
+    free(ev);
 }
 #endif
