@@ -20,7 +20,7 @@ protected:
 #if defined(Q_OS_WIN)
     bool winEvent (MSG * message, long * result);
 #elif defined(Q_OS_LINUX)
-
+    bool linuxEvent(void* message);
 #endif
     bool nativeEvent(const QByteArray &eventType, void *message, long *result);
 signals:
@@ -40,5 +40,7 @@ private:
 #if defined(Q_OS_WIN)
     size_t qtKeyToWin(size_t key);
     void registerHotkeyWin(const QString& str, size_t hotkeyId);
+#elif defined(Q_OS_LINUX)
+    void registerHotkeyLinux();
 #endif
 };

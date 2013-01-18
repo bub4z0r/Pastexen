@@ -47,3 +47,6 @@ isEmpty(PREFIX) {
 }
 target.path=$$PREFIX/
 
+unix {
+    LIBS += -lxcb-keysyms
+}

@@ -4,12 +4,18 @@
 #include <QShowEvent>
 #include <QDesktopWidget>
 #include <QDebug>
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN)
 #include <windows.h>
+#elif defined(Q_OS_LINUX)
+#include <xcb/xcb.h>
+#include <xcb/xcb_keysyms.h>
+#include <X11/keysym.h>
+#include <X11/Xlib.h>
 #endif
 #include "application.h"
 #include "scanhotkeydialog.h"
 #include "defines.h"
+
 
 ConfigWidget::ConfigWidget(QSettings *settings, QMap<QString, QString> &languages, QWidget *parent)
     : QWidget(parent),
@@ -32,6 +38,7 @@ ConfigWidget::ConfigWidget(QSettings *settings, QMap<QString, QString> &language
     registerActualHotkeys();
 }
 
+
 void ConfigWidget::registerActualHotkeys() {
     QString fullHotkey = _settings->value("general/fullhotkey", DEFAULT_HOTKEY_FULL).toString();
     QString partHotkey = _settings->value("general/parthotkey", DEFAULT_HOTKEY_PART).toString();
@@ -39,12 +46,15 @@ void ConfigWidget::registerActualHotkeys() {
 
     qDebug() << "Full hotkey: " << fullHotkey;
 
-    #ifdef Q_OS_WIN
+#if defined(Q_OS_WIN)
     registerHotkeyWin(partHotkey, HOTKEY_PART_ID);
     registerHotkeyWin(fullHotkey, HOTKEY_FULL_ID);
     registerHotkeyWin(codeHotkey, HOTKEY_CODE_ID);
-    #endif
+#elif defined(Q_OS_LINUX)
+    registerHotkeyLinux();
+#endif
 }
+
 
 void ConfigWidget::init()
 {
@@ -74,6 +84,89 @@ void ConfigWidget::init()
 
     _ui.checkBoxLangDialogShow->setChecked(showsourcedialog);
 }
+
+
+bool ConfigWidget::nativeEvent(const QByteArray &eventType, void *message, long *result) {
+    Q_UNUSED(eventType);
+
+#if defined(Q_OS_WIN)
+    winEvent((MSG*)message, result);
+#elif defined(Q_OS_LINUX)
+    linuxEvent(message);
+#endif
+    return false;
+}
+
+
+void ConfigWidget::showTypes(QString fullHotkey, QString partHotkey, QString textHotkey)
+{
+    _ui.comboImageType->addItem("JPG", QString("jpg"));
+    _ui.comboImageType->addItem("PNG", QString("png"));
+
+    for (QMap<QString, QString>::iterator i = _languages.begin(); i != _languages.end(); i++) {
+        _ui.comboSourcesType->addItem(i.value(), i.key());
+    }
+
+    _ui.fullhotkey->setText(fullHotkey);
+    _ui.parthotkey->setText(partHotkey);
+    _ui.texthotkey->setText(textHotkey);
+}
+
+
+
+void ConfigWidget::closeEvent(QCloseEvent *event)
+{
+    this->hide();
+    event->ignore();
+}
+
+
+void ConfigWidget::showEvent(QShowEvent *event)
+{
+    emit showSignal(false);
+    raise();
+    activateWindow();
+    QWidget::showEvent(event);
+}
+
+
+void ConfigWidget::hideEvent(QHideEvent *event)
+{
+    emit showSignal(true);
+    QWidget::hideEvent(event);
+}
+
+
+void ConfigWidget::applyChanges()
+{
+    emit settingsChanged();
+    _settings->setValue("general/imagetype", _ui.comboImageType->itemData(_ui.comboImageType->currentIndex()).toString());
+    _settings->setValue("general/sourcetype", _ui.comboSourcesType->itemData(_ui.comboSourcesType->currentIndex()).toString());
+    _settings->setValue("general/showsourcedialog", _ui.checkBoxLangDialogShow->isChecked());
+    _settings->sync();
+    this->hide();
+}
+
+
+void ConfigWidget::changeHotkey()
+{
+    ScanHotkeyDialog dial(this);
+    dial.setModal(true);
+    if (dial.exec()) {
+        QPushButton* b = qobject_cast<QPushButton*>(sender());
+        if (b) {
+            QString settingsKey("general/");
+            settingsKey += b->objectName();
+
+            _settings->setValue(settingsKey, dial.key());
+
+            b->setText(dial.key());
+
+            registerActualHotkeys();
+        }
+    }
+}
+
 
 #if defined(Q_OS_WIN)
 size_t ConfigWidget::qtKeyToWin(size_t key) {
@@ -138,76 +231,47 @@ bool ConfigWidget::winEvent (MSG * message, long * result) {
     }
     return false;
 }
+#elif defined(Q_OS_LINUX)
+void ConfigWidget::registerHotkeyLinux()
+{
+    qDebug() << Q_FUNC_INFO;
+
+    xcb_connection_t* c = xcb_connect(0, 0);
+    if (xcb_connection_has_error(c)) {
+        qDebug("xcb_connect() error");
+        return;
+    }
+
+    // FIXME: I think, this will be work on first screen only
+    xcb_screen_t* screen = xcb_setup_roots_iterator(xcb_get_setup(c)).data;
+
+    xcb_key_symbols_t* keySymbs = xcb_key_symbols_alloc(c);
+
+    xcb_keycode_t* keyCode = xcb_key_symbols_get_keycode(keySymbs, XK_F7);
+
+    xcb_void_cookie_t vc = xcb_grab_key_checked(c, 0, screen->root, XCB_MOD_MASK_ANY, *keyCode,
+                                       XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+
+    xcb_generic_error_t* error = xcb_request_check(c, vc);
+
+    int r = xcb_flush(c);
+
+//    xcb_key_symbols_free(keySymbs);
+
+    qDebug() << vc.sequence << screen->root << r;
+}
+
+bool ConfigWidget::linuxEvent(void *message)
+{
+    xcb_generic_event_t* ev = static_cast<xcb_generic_event_t*>(message);
+
+    qDebug() << (ev->response_type & ~0x80);
+
+    switch(ev->response_type & ~0x80) {
+    case XCB_KEY_PRESS: {
+        qDebug() << "KeyPress event";
+    } break;
+    }
+
+}
 #endif
-
-bool ConfigWidget::nativeEvent(const QByteArray &eventType, void *message, long *result) {
-    Q_UNUSED(eventType);
-    #ifdef Q_OS_WIN
-    winEvent((MSG*)message, result);
-    #endif
-    return false;
-}
-
-void ConfigWidget::showTypes(QString fullHotkey, QString partHotkey, QString textHotkey)
-{
-    _ui.comboImageType->addItem("JPG", QString("jpg"));
-    _ui.comboImageType->addItem("PNG", QString("png"));
-
-    for (QMap<QString, QString>::iterator i = _languages.begin(); i != _languages.end(); i++) {
-        _ui.comboSourcesType->addItem(i.value(), i.key());
-    }
-
-    _ui.fullhotkey->setText(fullHotkey);
-    _ui.parthotkey->setText(partHotkey);
-    _ui.texthotkey->setText(textHotkey);
-}
-
-
-void ConfigWidget::closeEvent(QCloseEvent *event)
-{
-    this->hide();
-    event->ignore();
-}
-
-void ConfigWidget::showEvent(QShowEvent *event)
-{
-    emit showSignal(false);
-    raise();
-    activateWindow();
-    QWidget::showEvent(event);
-}
-
-void ConfigWidget::hideEvent(QHideEvent *event)
-{
-    emit showSignal(true);
-    QWidget::hideEvent(event);
-}
-
-void ConfigWidget::applyChanges()
-{
-    emit settingsChanged();
-    _settings->setValue("general/imagetype", _ui.comboImageType->itemData(_ui.comboImageType->currentIndex()).toString());
-    _settings->setValue("general/sourcetype", _ui.comboSourcesType->itemData(_ui.comboSourcesType->currentIndex()).toString());
-    _settings->setValue("general/showsourcedialog", _ui.checkBoxLangDialogShow->isChecked());
-    _settings->sync();
-    this->hide();
-}
-
-void ConfigWidget::changeHotkey()
-{
-    ScanHotkeyDialog dial(this);
-    dial.setModal(true);
-    if (dial.exec()) {
-        QPushButton* b = qobject_cast<QPushButton*>(sender());
-        if (b) {
-            QString settingsKey("general/");
-            settingsKey += b->objectName();
-
-            _settings->setValue(settingsKey, dial.key());
-
-            b->setText(dial.key());
-
-            registerActualHotkeys();
-        }
-    }
-}
